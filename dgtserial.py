@@ -45,7 +45,7 @@ class DgtSerial(object):
         # the next three are only used for "not dgtpi" mode
         self.clock_lock = False  # serial connected clock is locked
         self.last_clock_command = []  # Used for resend last (failed) clock command
-        self.rt = RepeatedTimer(1, self.watchdog)
+        self.rt = RepeatedTimer(1, self._watchdog)
         # bluetooth vars for Jessie & autoconnect
         self.btctl = None
         self.bt_rfcomm = None
@@ -57,14 +57,14 @@ class DgtSerial(object):
         self.bt_name = ''
         self.wait_counter = 0
 
-    def startup_serial_hardware(self):
-        self.setup_serial_port()
+    def _startup_serial_hardware(self):
+        self._setup_serial_port()
         if self.serial:
             time.sleep(1.5)
             if not self.is_pi:  # can this "if" be removed for example for a RevII board?!?
                 self.clock_lock = False
                 self.startup_serial_clock()
-            self.startup_serial_board()
+            self._startup_serial_board()
 
     def write_board_command(self, message):
         mes = message[3] if message[0].value == DgtCmd.DGT_CLOCK_MESSAGE.value else message[0]
@@ -131,11 +131,11 @@ class DgtSerial(object):
             if self.clock_lock:
                 logging.warning('DGT clock [ser]: already locked. Maybe a "resend"?')
             else:
-                logging.debug('DGT clock [ser]: locked')
+                logging.debug('DGT clock [ser]: now locked')
                 self.clock_lock = time.time()
         return True
 
-    def process_board_message(self, message_id, message):
+    def _process_board_message(self, message_id, message):
         for case in switch(message_id):
             if case(DgtMsg.DGT_MSG_VERSION):  # Get the DGT board version
                 board_version = str(message[0]) + '.' + str(message[1])
@@ -149,10 +149,12 @@ class DgtSerial(object):
                         self.enable_revelation_leds = True
                     elif 'DGT_BT' in self.bt_name:
                         text_l, text_m, text_s = 'DGTBT ' + self.bt_name[-5:], 'BT ' + self.bt_name[-5:], self.bt_name[-5:]
+                        self.enable_revelation_leds = False
                     else:
                         text_l, text_m, text_s = 'BT e-Board', 'BT board', 'ok bt'
                     channel = 'BT'
-                text = Dgt.DISPLAY_TEXT(l=text_l, m=text_m, s=text_s, wait=True, beep=False, maxtime=1)
+                text = Dgt.DISPLAY_TEXT(l=text_l, m=text_m, s=text_s,
+                                        wait=True, beep=False, maxtime=1, devs={'ser', 'i2c', 'web'})
                 DisplayMsg.show(Message.EBOARD_VERSION(text=text, channel=channel))
                 if self.rt.is_running():
                     logging.warning('watchdog timer is already running')
@@ -216,18 +218,19 @@ class DgtSerial(object):
                     status = (message[6] & 0x3f)
                     if status & 0x20:
                         logging.warning('DGT clock [ser] not connected')
+                        self.lever_pos = None
                     else:
                         tr = [r_hours, r_mins, r_secs]
                         tl = [l_hours, l_mins, l_secs]
                         logging.info('DGT clock [ser]: received time from clock l:{} r:{}'.format(tl, tr))
                         DisplayMsg.show(Message.DGT_CLOCK_TIME(time_left=tl, time_right=tr))
 
-                    right_side_down = -0x40 if status & 0x02 else 0x40
-                    if self.lever_pos != right_side_down:
-                        logging.debug('button status: {} old lever_pos: {}'.format(status, self.lever_pos))
-                        if self.lever_pos is not None:
-                            DisplayMsg.show(Message.DGT_BUTTON(button=right_side_down))
-                        self.lever_pos = right_side_down
+                        right_side_down = -0x40 if status & 0x02 else 0x40
+                        if self.lever_pos != right_side_down:
+                            logging.debug('button status: {} old lever_pos: {}'.format(status, self.lever_pos))
+                            if self.lever_pos is not None:
+                                DisplayMsg.show(Message.DGT_BUTTON(button=right_side_down))
+                            self.lever_pos = right_side_down
                 else:
                     logging.debug('DGT clock [ser]: null message ignored')
                 if self.clock_lock:
@@ -271,12 +274,15 @@ class DgtSerial(object):
                 self.write_board_command([DgtCmd.DGT_SEND_BRD])  # Ask for the board when a piece moved
                 break
             if case(DgtMsg.DGT_MSG_SERIALNR):
-                # logging.debug(''.join([chr(elem) for elem in message]))
+                DisplayMsg.show(Message.DGT_SERIAL_NR(number=''.join([chr(elem) for elem in message])))
+                break
+            if case(DgtMsg.DGT_MSG_BATTERY_STATUS):
+                logging.debug(message)
                 break
             if case():  # Default
                 logging.warning("DGT message not handled [%s]", DgtMsg(message_id))
 
-    def read_board_message(self, head=None):
+    def _read_board_message(self, head=None):
         header_len = 3
         if head:
             header = head + self.serial.read(header_len - 1)
@@ -293,12 +299,12 @@ class DgtSerial(object):
             if not message_id == DgtMsg.DGT_MSG_SERIALNR:
                 logging.debug("get DGT board [%s], length: %i", DgtMsg(message_id), message_length)
             message = struct.unpack('>' + str(message_length) + 'B', self.serial.read(message_length))
-            self.process_board_message(message_id, message)
+            self._process_board_message(message_id, message)
         except ValueError:
             logging.warning("unknown DGT message value: %i length: %i", message_id, message_length)
         return message_id
 
-    def process_incoming_board_forever(self):
+    def _process_incoming_board_forever(self):
         counter = 0
         logging.info('incoming_board ready')
         while True:
@@ -307,13 +313,13 @@ class DgtSerial(object):
                 if self.serial:
                     c = self.serial.read(1)
                 else:
-                    self.startup_serial_hardware()
+                    self._startup_serial_hardware()
                 if c:
-                    self.read_board_message(head=c)
+                    self._read_board_message(head=c)
                 else:
-                    counter = (counter + 1) % 8
-                    if counter == 0:  # issue 150 - force to write something to the board => check for alive connection!
-                        self.write_board_command([DgtCmd.DGT_RETURN_SERIALNR])  # the code doesnt really matter ;-)
+                    counter = (counter + 1) % 10
+                    if counter == 0:  # issue 150 - check for alive connection
+                        self._watchdog()  # force to write something to the board
                     time.sleep(0.1)
             except pyserial.SerialException:
                 pass
@@ -323,20 +329,20 @@ class DgtSerial(object):
                 pass
 
     def startup_serial_clock(self):
-        # Get clock version
         command = [DgtCmd.DGT_CLOCK_MESSAGE, 0x03, DgtClk.DGT_CMD_CLOCK_START_MESSAGE,
                    DgtClk.DGT_CMD_CLOCK_VERSION, DgtClk.DGT_CMD_CLOCK_END_MESSAGE]
-        self.write_board_command(command)
+        self.write_board_command(command)  # Get clock version
 
-    def startup_serial_board(self):
+    def _startup_serial_board(self):
         self.write_board_command([DgtCmd.DGT_SEND_UPDATE_NICE])  # Set the board update mode
         self.write_board_command([DgtCmd.DGT_SEND_VERSION])  # Get board version
         self.write_board_command([DgtCmd.DGT_SEND_BRD])  # Update the board
+        # self.write_board_command([DgtCmd.DGT_SEND_BATTERY_STATUS])  # Get the battery status (BT Boards) - as TEST!
 
-    def watchdog(self):
-        self.write_board_command([DgtCmd.DGT_RETURN_SERIALNR])  # the code doesnt really matter ;-)
+    def _watchdog(self):
+        self.write_board_command([DgtCmd.DGT_RETURN_SERIALNR])
 
-    def check_bluetooth(self):
+    def _open_bluetooth(self):
         if self.bt_state == -1:
             # only for jessie
             if path.exists("/usr/bin/bluetoothctl"):
@@ -370,7 +376,7 @@ class DgtSerial(object):
             # check for new data from bluetoothctl
             try:
                 while True:
-                    b = read(self.btctl.stdout.fileno(), 1).decode(encoding='UTF-8')
+                    b = read(self.btctl.stdout.fileno(), 1).decode(encoding='UTF-8', errors='ignore')
                     self.bt_line += b
                     if b == '' or b == '\n':
                         break
@@ -412,10 +418,13 @@ class DgtSerial(object):
                     logging.debug("BT pairing failed, unknown device")
                 if ("DGT_BT_" in self.bt_line or "PCS-REVII" in self.bt_line) and "DEL" not in self.bt_line:
                     # New e-Board found add to list
-                    if not self.bt_line.split()[3] in self.bt_mac_list:
-                        self.bt_mac_list.append(self.bt_line.split()[3])
-                        self.bt_name_list.append(self.bt_line.split()[4])
-                        logging.debug('BT found device: %s %s', self.bt_line.split()[3], self.bt_line.split()[4])
+                    try:
+                        if not self.bt_line.split()[3] in self.bt_mac_list:
+                            self.bt_mac_list.append(self.bt_line.split()[3])
+                            self.bt_name_list.append(self.bt_line.split()[4])
+                            logging.debug('BT found device: %s %s', self.bt_line.split()[3], self.bt_line.split()[4])
+                    except IndexError:
+                        logging.error('wrong bt_line [%s]', self.bt_line)
 
                 # clear the line
                 self.bt_line = ''
@@ -463,7 +472,7 @@ class DgtSerial(object):
                 # rfcomm succeeded
                 if path.exists("/dev/rfcomm123"):
                     logging.debug("BT connected to: %s", self.bt_name_list[self.bt_current_device])
-                    if self.check_serial("/dev/rfcomm123"):
+                    if self._open_serial("/dev/rfcomm123"):
                         self.btctl.stdin.write("quit\n")
                         self.btctl.stdin.flush()
                         self.bt_name = self.bt_name_list[self.bt_current_device]
@@ -481,8 +490,7 @@ class DgtSerial(object):
                     self.bt_state = 4
         return False
 
-    def check_serial(self, device):
-        # Open the serial port
+    def _open_serial(self, device):
         try:
             self.serial = pyserial.Serial(device, stopbits=pyserial.STOPBITS_ONE,
                                           parity=pyserial.PARITY_NONE, bytesize=pyserial.EIGHTBITS, timeout=2)
@@ -490,7 +498,7 @@ class DgtSerial(object):
             return False
         return True
 
-    def setup_serial_port(self):
+    def _setup_serial_port(self):
         waitchars = ['/', '-', '\\', '|']
 
         if self.rt.is_running():
@@ -498,26 +506,27 @@ class DgtSerial(object):
         with self.lock:
             if not self.serial:
                 if self.given_device:
-                    self.check_serial(self.given_device)
+                    self._open_serial(self.given_device)
                 else:
                     for file in os.listdir('/dev'):
                         if file.startswith('ttyACM') or file.startswith('ttyUSB') or file == 'rfcomm0':
                             dev = os.path.join('/dev', file)
-                            if self.check_serial(dev):
+                            if self._open_serial(dev):
                                 self.device = dev
                                 logging.debug('DGT board connected to %s', self.device)
                                 return
-                    if self.check_bluetooth():
+                    if self._open_bluetooth():
                         self.device = '/dev/rfcomm123'
                         logging.debug('DGT board connected to %s', self.device)
                         return
 
                 # text = self.dgttranslate.text('N00_noboard', 'Board' + waitchars[self.wait_counter])
                 s = 'Board' + waitchars[self.wait_counter]
-                text = Dgt.DISPLAY_TEXT(l='no e-' + s, m='no' + s, s=s, wait=True, beep=False, maxtime=0)
-                DisplayMsg.show(Message.NO_EBOARD_ERROR(text=text, is_pi=self.is_pi))
+                text = Dgt.DISPLAY_TEXT(l='no e-' + s, m='no' + s, s=s,
+                                        wait=True, beep=False, maxtime=0, devs={'i2c', 'web'})
+                DisplayMsg.show(Message.NO_EBOARD_ERROR(text=text))
                 self.wait_counter = (self.wait_counter + 1) % len(waitchars)
 
     def run(self):
-        self.incoming_board_thread = Timer(0, self.process_incoming_board_forever)
+        self.incoming_board_thread = Timer(0, self._process_incoming_board_forever)
         self.incoming_board_thread.start()

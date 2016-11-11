@@ -30,7 +30,7 @@ class DgtHw(DgtIface):
         self.lib = DgtLib(self.dgtserial)
         self.dgtserial.run()
 
-    def _display_on_dgt_xl(self, text, beep=False, left_dots=0, right_dots=0):
+    def _display_on_dgt_xl(self, text, beep=False, left_dots=ClockDots.NONE, right_dots=ClockDots.NONE):
         if not self.clock_found:  # This can only happen on the XL function
             logging.debug('DGT clock (still) not found. Ignore [%s]', text)
             self.dgtserial.startup_serial_clock()
@@ -44,7 +44,7 @@ class DgtHw(DgtIface):
             if not res:
                 logging.warning('Finally failed %i', res)
 
-    def _display_on_dgt_3000(self, text, beep=False, left_dots=0, right_dots=0):
+    def _display_on_dgt_3000(self, text, beep=False, left_dots=ClockDots.NONE, right_dots=ClockDots.NONE):
         text = text.ljust(8)
         if len(text) > 8:
             logging.warning('DGT 3000 clock message too long [%s]', text)
@@ -55,43 +55,57 @@ class DgtHw(DgtIface):
             if not res:
                 logging.warning('Finally failed %i', res)
 
-    def display_text_on_clock(self, text, beep=False, left_dots=0, right_dots=0):
-        if self.enable_dgt_3000:
-            self._display_on_dgt_3000(text, beep, left_dots, right_dots)
-        else:
-            self._display_on_dgt_xl(text, beep, left_dots, right_dots)
+    def display_text_on_clock(self, message):
+        if 'ser' not in message.devs:
+            return
+        display_m = self.enable_dgt_3000 and not self.dgtserial.enable_revelation_leds
+        text = message.m if display_m else message.s
 
-    def display_move_on_clock(self, move, fen, side, beep=False, left_dots=0, right_dots=0):
-        if self.enable_dgt_3000:
-            bit_board = Board(fen)
-            move_text = bit_board.san(move)
-            if side == ClockSide.RIGHT:
+        if text is None:
+            text = message.l if display_m else message.m
+        left_dots = message.ld if hasattr(message, 'ld') else ClockDots.NONE
+        right_dots = message.rd if hasattr(message, 'rd') else ClockDots.NONE
+
+        if display_m:
+            self._display_on_dgt_3000(text, message.beep, left_dots, right_dots)
+        else:
+            self._display_on_dgt_xl(text, message.beep, left_dots, right_dots)
+
+    def display_move_on_clock(self, message):
+        left_dots = message.ld if hasattr(message, 'ld') else ClockDots.NONE
+        right_dots = message.rd if hasattr(message, 'rd') else ClockDots.NONE
+        display_m = self.enable_dgt_3000 and not self.dgtserial.enable_revelation_leds
+        if display_m:
+            bit_board = Board(message.fen)
+            move_text = bit_board.san(message.move)
+            if message.side == ClockSide.RIGHT:
                 move_text = move_text.rjust(8)
             text = self.dgttranslate.move(move_text)
-            self._display_on_dgt_3000(text, beep, left_dots, right_dots)
+            self._display_on_dgt_3000(text, message.beep, left_dots, right_dots)
         else:
-            move_text = move.uci()
-            if side == ClockSide.RIGHT:
+            move_text = message.move.uci()
+            if message.side == ClockSide.RIGHT:
                 move_text = move_text.rjust(6)
-            self._display_on_dgt_xl(move_text, beep, left_dots, right_dots)
+            self._display_on_dgt_xl(move_text, message.beep, left_dots, right_dots)
 
     def display_time_on_clock(self, force=False):
         if self.clock_running or force:
-            self.lib.end_text()
+            with self.lib_lock:
+                self.lib.end_text()
         else:
             logging.debug('DGT clock isnt running - no need for endClock')
 
-    def light_squares_revelation_board(self, squares):
+    def light_squares_revelation_board(self, uci_move):
         if self.dgtserial.enable_revelation_leds:
-            for sq in squares:
-                dgt_square = (8 - int(sq[1])) * 8 + ord(sq[0]) - ord('a')
-                logging.debug("REV2 light on square %s", sq)
-                self.lib.write([DgtCmd.DGT_SET_LEDS, 0x04, 0x01, dgt_square, dgt_square])
+            logging.debug("REV2 lights on move {}".format(uci_move))
+            fr = (8 - int(uci_move[1])) * 8 + ord(uci_move[0]) - ord('a')
+            to = (8 - int(uci_move[3])) * 8 + ord(uci_move[2]) - ord('a')
+            self.lib.write([DgtCmd.DGT_SET_LEDS, 0x04, 0x01, fr, to, DgtClk.DGT_CMD_CLOCK_END_MESSAGE])
 
     def clear_light_revelation_board(self):
         if self.dgtserial.enable_revelation_leds:
             logging.debug('REV2 lights turned off')
-            self.lib.write([DgtCmd.DGT_SET_LEDS, 0x04, 0x00, 0, 63])
+            self.lib.write([DgtCmd.DGT_SET_LEDS, 0x04, 0x00, 0, 63, DgtClk.DGT_CMD_CLOCK_END_MESSAGE])
 
     def stop_clock(self):
         self.resume_clock(ClockSide.NONE)

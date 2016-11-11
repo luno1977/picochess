@@ -31,12 +31,11 @@ import copy
 import gc
 
 from engine import UciEngine, read_engine_ini
-import chesstalker.chesstalker
 
 from timecontrol import TimeControl
 from utilities import *
 from keyboard import KeyboardInput, TerminalDisplay
-from pgn import PgnDisplay
+from pgn import Emailer, PgnDisplay
 from server import WebServer
 
 from dgthw import DgtHw
@@ -48,7 +47,6 @@ from dgttranslate import DgtTranslate
 
 from logging.handlers import RotatingFileHandler
 from configobj import ConfigObj
-# from engine import get_installed_engines
 
 
 class AlternativeMover:
@@ -101,7 +99,7 @@ def main():
 
     def compute_legal_fens(g):
         """
-        Computes a list of legal FENs for the given game.
+        Compute a list of legal FENs for the given game.
         :param g: The game
         :return: A list of legal FENs
         """
@@ -117,19 +115,18 @@ def main():
             return None
         score = gaviota.probe_dtm(game)
         if score is not None:
-            Observable.fire(Event.NEW_SCORE(score='tb', mate=score))
+            Observable.fire(Event.NEW_SCORE(score='gaviota', mate=score))
         return score
 
     def think(game, tc):
         """
-        Starts a new search on the current game.
+        Start a new search on the current game.
         If a move is found in the opening book, fire an event in a few seconds.
         :return:
         """
         start_clock()
         book_move = searchmoves.book(bookreader, game)
         if book_move:
-            Observable.fire(Event.NEW_SCORE(score='book', mate=None))
             Observable.fire(Event.BEST_MOVE(result=book_move, inbook=True))
         else:
             probe_tablebase(game)
@@ -143,7 +140,7 @@ def main():
 
     def analyse(game):
         """
-        Starts a new ponder search on the current game.
+        Start a new ponder search on the current game.
         :return:
         """
         probe_tablebase(game)
@@ -158,6 +155,15 @@ def main():
         start_clock()
         analyse(game)
 
+    def stop_search_and_clock():
+        if interaction_mode == Mode.NORMAL:
+            stop_clock()
+        elif interaction_mode in (Mode.REMOTE, Mode.OBSERVE):
+            stop_clock()
+            stop_search()
+        elif interaction_mode in (Mode.ANALYSIS, Mode.KIBITZ, Mode.PONDER):
+            stop_search()
+
     def stop_search():
         """
         Stop current search.
@@ -171,10 +177,6 @@ def main():
             DisplayMsg.show(Message.CLOCK_STOP())
         else:
             logging.warning('wrong mode: {}'.format(interaction_mode))
-
-    def stop_search_and_clock():
-        stop_clock()
-        stop_search()
 
     def start_clock():
         if interaction_mode in (Mode.NORMAL, Mode.OBSERVE, Mode.REMOTE):
@@ -315,18 +317,24 @@ def main():
                     else:
                         legal_fens = compute_legal_fens(game)
 
-                    if interaction_mode == Mode.ANALYSIS or interaction_mode == Mode.KIBITZ:
+                    if interaction_mode in (Mode.ANALYSIS, Mode.KIBITZ, Mode.PONDER):
                         analyse(game)
-                    elif interaction_mode == Mode.OBSERVE or interaction_mode == Mode.REMOTE:
+                    elif interaction_mode in (Mode.OBSERVE, Mode.REMOTE):
                         observe(game)
                     start_clock()
                     DisplayMsg.show(Message.USER_TAKE_BACK())
                     break
 
-    def set_wait_state():
+    def set_wait_state(start_search=True):
         if interaction_mode == Mode.NORMAL:
             nonlocal play_mode
             play_mode = PlayMode.USER_WHITE if game.turn == chess.WHITE else PlayMode.USER_BLACK
+        if start_search:
+            # Go back to analysing or observing
+            if interaction_mode in (Mode.ANALYSIS, Mode.KIBITZ, Mode.PONDER):
+                analyse(game)
+            if interaction_mode in (Mode.OBSERVE, Mode.REMOTE):
+                observe(game)
 
     def handle_move(move, ponder=None, inbook=False):
         nonlocal game
@@ -336,12 +344,7 @@ def main():
         turn = game.turn
 
         # clock must be stoped BEFORE the "book_move" event cause SetNRun resets the clock display
-        if interaction_mode == Mode.NORMAL:
-            stop_clock()
-        elif interaction_mode == Mode.REMOTE or interaction_mode == Mode.OBSERVE:
-            stop_search_and_clock()
-        elif interaction_mode == Mode.ANALYSIS or interaction_mode == Mode.KIBITZ:
-            stop_search()
+        stop_search_and_clock()
 
         # engine or remote move
         if (interaction_mode == Mode.NORMAL or interaction_mode == Mode.REMOTE) and \
@@ -373,7 +376,7 @@ def main():
                 if check_game_state(game, play_mode):
                     observe(game)
                 text = Message.REVIEW_MOVE(move=move, fen=fen, turn=turn, game=game.copy(), mode=interaction_mode)
-            else: # interaction_mode in (Mode.ANALYSIS, Mode.KIBITZ):
+            else:  # interaction_mode in (Mode.ANALYSIS, Mode.KIBITZ):
                 if check_game_state(game, play_mode):
                     analyse(game)
                 text = Message.REVIEW_MOVE(move=move, fen=fen, turn=turn, game=game.copy(), mode=interaction_mode)
@@ -423,52 +426,52 @@ def main():
     gc.enable()
 
     # Command line argument parsing
-    parser = configargparse.ArgParser(default_config_files=[os.path.join(os.path.dirname(__file__), "picochess.ini")])
-    parser.add_argument("-e", "--engine", type=str, help="UCI engine executable path", default=None)
-    parser.add_argument("-el", "--engine-level", type=str, help="UCI engine level", default=None)
-    parser.add_argument("-d", "--dgt-port", type=str,
-                        help="enable dgt board on the given serial port such as /dev/ttyUSB0")
-    parser.add_argument("-b", "--book", type=str, help="Opening book - full name of book in 'books' folder",
+    parser = configargparse.ArgParser(default_config_files=[os.path.join(os.path.dirname(__file__), 'picochess.ini')])
+    parser.add_argument('-e', '--engine', type=str, help='UCI engine executable path', default=None)
+    parser.add_argument('-el', '--engine-level', type=str, help='UCI engine level', default=None)
+    parser.add_argument('-d', '--dgt-port', type=str,
+                        help='enable dgt board on the given serial port such as /dev/ttyUSB0')
+    parser.add_argument('-b', '--book', type=str, help='full path of book such as books/b-flank.bin',
                         default='h-varied.bin')
-    parser.add_argument("-t", "--time", type=str, default='5 0',
-                        help="Time settings <FixSec> or <StMin IncSec> like '10'(fixed) or '5 0'(blitz) '3 2'(fischer)")
-    parser.add_argument("-g", "--enable-gaviota", action='store_true', help="enable gavoita tablebase probing")
-    parser.add_argument("-leds", "--enable-revelation-leds", action='store_true', help="enable Revelation leds")
-    parser.add_argument("-l", "--log-level", choices=['notset', 'debug', 'info', 'warning', 'error', 'critical'],
-                        default='warning', help="logging level")
-    parser.add_argument("-lf", "--log-file", type=str, help="log to the given file")
-    parser.add_argument("-rs", "--remote-server", type=str, help="remote server running the engine")
-    parser.add_argument("-ru", "--remote-user", type=str, help="remote user on server running the engine")
-    parser.add_argument("-rp", "--remote-pass", type=str, help="password for the remote user")
-    parser.add_argument("-rk", "--remote-key", type=str, help="key file used to connect to the remote server")
-    parser.add_argument("-pf", "--pgn-file", type=str, help="pgn file used to store the games", default='games.pgn')
-    parser.add_argument("-pu", "--pgn-user", type=str, help="user name for the pgn file", default=None)
-    parser.add_argument("-ar", "--auto-reboot", action='store_true', help="reboot system after update")
-    parser.add_argument("-web", "--web-server", dest="web_server_port", nargs="?", const=80, type=int, metavar="PORT",
-                        help="launch web server")
-    parser.add_argument("-m", "--email", type=str, help="email used to send pgn files", default=None)
-    parser.add_argument("-ms", "--smtp-server", type=str, help="Adress of email server", default=None)
-    parser.add_argument("-mu", "--smtp-user", type=str, help="Username for email server", default=None)
-    parser.add_argument("-mp", "--smtp-pass", type=str, help="Password for email server", default=None)
-    parser.add_argument("-me", "--smtp-encryption", action='store_true',
-                        help="use ssl encryption connection to smtp-Server")
-    parser.add_argument("-mf", "--smtp-from", type=str, help="From email", default='no-reply@picochess.org')
-    parser.add_argument("-mk", "--mailgun-key", type=str, help="key used to send emails via Mailgun Webservice",
+    parser.add_argument('-t', '--time', type=str, default='5 0',
+                        help="Time settings <FixSec> or <StMin IncSec> like '10'(move) or '5 0'(game) '3 2'(fischer)")
+    parser.add_argument('-g', '--enable-gaviota', action='store_true', help='enable gavoita tablebase probing')
+    parser.add_argument('-leds', '--enable-revelation-leds', action='store_true', help='enable Revelation leds')
+    parser.add_argument('-l', '--log-level', choices=['notset', 'debug', 'info', 'warning', 'error', 'critical'],
+                        default='warning', help='logging level')
+    parser.add_argument('-lf', '--log-file', type=str, help='log to the given file')
+    parser.add_argument('-rs', '--remote-server', type=str, help='remote server running the engine')
+    parser.add_argument('-ru', '--remote-user', type=str, help='remote user on server running the engine')
+    parser.add_argument('-rp', '--remote-pass', type=str, help='password for the remote user')
+    parser.add_argument('-rk', '--remote-key', type=str, help='key file used to connect to the remote server')
+    parser.add_argument('-pf', '--pgn-file', type=str, help='pgn file used to store the games', default='games.pgn')
+    parser.add_argument('-pu', '--pgn-user', type=str, help='user name for the pgn file', default=None)
+    parser.add_argument('-ar', '--auto-reboot', action='store_true', help='reboot system after update')
+    parser.add_argument('-web', '--web-server', dest='web_server_port', nargs='?', const=80, type=int, metavar='PORT',
+                        help='launch web server')
+    parser.add_argument('-m', '--email', type=str, help='email used to send pgn files', default=None)
+    parser.add_argument('-ms', '--smtp-server', type=str, help='adress of email server', default=None)
+    parser.add_argument('-mu', '--smtp-user', type=str, help='username for email server', default=None)
+    parser.add_argument('-mp', '--smtp-pass', type=str, help='password for email server', default=None)
+    parser.add_argument('-me', '--smtp-encryption', action='store_true',
+                        help='use ssl encryption connection to smtp-Server')
+    parser.add_argument('-mf', '--smtp-from', type=str, help='From email', default='no-reply@picochess.org')
+    parser.add_argument('-mk', '--mailgun-key', type=str, help='key used to send emails via Mailgun Webservice',
                         default=None)
-    parser.add_argument("-bc", "--beep-config", choices=['none', 'some', 'all'], help="sets standard beep config",
+    parser.add_argument('-bc', '--beep-config', choices=['none', 'some', 'all'], help='sets standard beep config',
                         default='some')
-    parser.add_argument("-beep", "--beep-level", type=int, default=0x03,
-                        help="sets (some-)beep level from 0(=no beeps) to 15(=all beeps)")
-    parser.add_argument("-uvoice", "--user-voice", type=str, help="voice for user", default=None)
-    parser.add_argument("-cvoice", "--computer-voice", type=str, help="voice for computer", default=None)
-    parser.add_argument("-inet", "--enable-internet", action='store_true', help="enable internet lookups")
-    parser.add_argument("-nook", "--disable-ok-message", action='store_true', help="disable ok confirmation messages")
-    parser.add_argument("-v", "--version", action='version', version='%(prog)s version {}'.format(version),
-                        help="show current version", default=None)
-    parser.add_argument("-pi", "--dgtpi", action='store_true', help="use the dgtpi hardware")
-    parser.add_argument("-lang", "--language", choices=['en', 'de', 'nl', 'fr', 'es'], default='en',
-                        help="picochess language")
-    parser.add_argument("-c", "--console", action='store_true', help="use console interface")
+    parser.add_argument('-beep', '--beep-level', type=int, default=0x03,
+                        help='sets (some-)beep level from 0(=no beeps) to 15(=all beeps)')
+    parser.add_argument('-uvoice', '--user-voice', type=str, help='voice for user', default=None)
+    parser.add_argument('-cvoice', '--computer-voice', type=str, help='voice for computer', default=None)
+    parser.add_argument('-inet', '--enable-internet', action='store_true', help='enable internet lookups')
+    parser.add_argument('-nook', '--disable-ok-message', action='store_true', help='disable ok confirmation messages')
+    parser.add_argument('-v', '--version', action='version', version='%(prog)s version {}'.format(version),
+                        help='show current version', default=None)
+    parser.add_argument('-pi', '--dgtpi', action='store_true', help='use the dgtpi hardware')
+    parser.add_argument('-lang', '--language', choices=['en', 'de', 'nl', 'fr', 'es'], default='en',
+                        help='picochess language')
+    parser.add_argument('-c', '--console', action='store_true', help='use console interface')
 
     args = parser.parse_args()
     if args.engine is None:
@@ -525,10 +528,12 @@ def main():
             DgtPi(dgtserial, dgttranslate).start()
         DgtHw(dgtserial, dgttranslate).start()
     # Save to PGN
-    PgnDisplay(
-        args.pgn_file, net=args.enable_internet, email=args.email, mailgun_key=args.mailgun_key,
+    emailer = Emailer(
+        net=args.enable_internet, email=args.email, mailgun_key=args.mailgun_key,
         smtp_server=args.smtp_server, smtp_user=args.smtp_user,
-        smtp_pass=args.smtp_pass, smtp_encryption=args.smtp_encryption, smtp_from=args.smtp_from).start()
+        smtp_pass=args.smtp_pass, smtp_encryption=args.smtp_encryption, smtp_from=args.smtp_from)
+
+    PgnDisplay(args.pgn_file, emailer).start()
     if args.pgn_user:
         user_name = args.pgn_user
     else:
@@ -537,14 +542,13 @@ def main():
         else:
             user_name = 'Player'
 
-    # Create ChessTalker for speech output
-    talker = None
+    # Create PicoTalker for speech output
     if args.user_voice or args.computer_voice:
-        logging.debug("initializing ChessTalker [%s, %s]", str(args.user_voice), str(args.computer_voice))
-        talker = chesstalker.chesstalker.ChessTalker(args.user_voice, args.computer_voice)
-        talker.start()
+        from talker.picotalker import PicoTalkerDisplay
+        logging.debug("initializing PicoTalker [%s, %s]", str(args.user_voice), str(args.computer_voice))
+        PicoTalkerDisplay(args.user_voice, args.computer_voice).start()
     else:
-        logging.debug('ChessTalker disabled')
+        logging.debug('PicoTalker disabled')
 
     # Gentlemen, start your engines...
     engine = UciEngine(args.engine, hostname=args.remote_server, username=args.remote_user,
@@ -672,32 +676,51 @@ def main():
                                                                  has_960=engine.has_chess960(), ok_text=event.ok_text))
                         else:
                             DisplayMsg.show(Message.ENGINE_FAIL())
-                        set_wait_state()
-                        # Go back to analysing or observing
-                        if interaction_mode == Mode.ANALYSIS or interaction_mode == Mode.KIBITZ:
-                            analyse(game)
-                        if interaction_mode == Mode.OBSERVE or interaction_mode == Mode.REMOTE:
-                            observe(game)
+                        set_wait_state(not engine_fallback)
                     break
 
                 if case(EventApi.SETUP_POSITION):
-                    logging.debug("setting up custom fen: {0}".format(event.fen))
-                    if engine.has_chess960():
-                        engine.option('UCI_Chess960', event.uci960)
-                        engine.send()
-                    else:  # start normal new game if engine can't handle the user wish
-                        event.uci960 = False
-                        logging.warning('engine doesnt support 960 mode')
+                    logging.debug("setting up custom fen: {}".format(event.fen))
+                    uci960 = event.uci960
+
                     if game.move_stack:
-                        if game.is_game_over() or game_declared:
+                        if not (game.is_game_over() or game_declared):
                             DisplayMsg.show(Message.GAME_ENDS(result=GameResult.ABORT, play_mode=play_mode, game=game.copy()))
-                    game = chess.Board(event.fen, event.uci960)
-                    legal_fens = compute_legal_fens(game)
+                    game = chess.Board(event.fen, uci960)
+                    # see new_game
                     stop_search_and_clock()
-                    time_control.reset()
-                    interaction_mode = Mode.NORMAL
-                    last_computer_fen = None
+                    if engine.has_chess960():
+                        engine.option('UCI_Chess960', uci960)
+                        engine.send()
+                    legal_fens = compute_legal_fens(game)
                     last_legal_fens = []
+                    last_computer_fen = None
+                    time_control.reset()
+                    searchmoves.reset()
+                    DisplayMsg.show(Message.START_NEW_GAME(time_control=time_control, game=game.copy()))
+                    game_declared = False
+                    set_wait_state()
+                    break
+
+                if case(EventApi.NEW_GAME):
+                    logging.debug('starting a new game with code: {}'.format(event.pos960))
+                    uci960 = event.pos960 != 518
+
+                    if game.move_stack:
+                        if not (game.is_game_over() or game_declared):
+                            DisplayMsg.show(Message.GAME_ENDS(result=GameResult.ABORT, play_mode=play_mode, game=game.copy()))
+                    game = chess.Board()
+                    if uci960:
+                        game.set_chess960_pos(event.pos960)
+                    # see setup_position
+                    stop_search_and_clock()
+                    if engine.has_chess960():
+                        engine.option('UCI_Chess960', uci960)
+                        engine.send()
+                    legal_fens = compute_legal_fens(game)
+                    last_legal_fens = []
+                    last_computer_fen = None
+                    time_control.reset()
                     searchmoves.reset()
                     DisplayMsg.show(Message.START_NEW_GAME(time_control=time_control, game=game.copy()))
                     game_declared = False
@@ -759,27 +782,6 @@ def main():
                             DisplayMsg.show(Message.SWITCH_SIDES(move=move))
                     break
 
-                if case(EventApi.NEW_GAME):
-                    stop_search_and_clock()
-                    if game.move_stack:
-                        logging.debug('starting a new game with code: {}'.format(event.pos960))
-                        if not (game.is_game_over() or game_declared):
-                            DisplayMsg.show(Message.GAME_ENDS(result=GameResult.ABORT, play_mode=play_mode, game=game.copy()))
-                    game = chess.Board()
-                    if event.pos960 != 518:  # 518 is normal game setup
-                        game.set_chess960_pos(event.pos960)
-                    legal_fens = compute_legal_fens(game)
-                    last_legal_fens = []
-                    # interaction_mode = Mode.NORMAL @todo
-                    last_computer_fen = None
-                    time_control.reset()
-                    searchmoves.reset()
-
-                    DisplayMsg.show(Message.START_NEW_GAME(time_control=time_control, game=game.copy()))
-                    game_declared = False
-                    set_wait_state()
-                    break
-
                 if case(EventApi.DRAWRESIGN):
                     if not game_declared:  # in case user leaves kings in place while moving other pieces
                         stop_search_and_clock()
@@ -802,35 +804,25 @@ def main():
                     if game.is_legal(event.pv[0]):
                         DisplayMsg.show(Message.NEW_PV(pv=event.pv, mode=interaction_mode, fen=game.fen(), turn=game.turn))
                     else:
-                        logging.info('illegal move can not be displayed. move:%s fen=%s',event.pv[0],game.fen())
+                        logging.info('illegal move can not be displayed. move:%s fen=%s', event.pv[0], game.fen())
                     break
 
                 if case(EventApi.NEW_SCORE):
-                    if event.score == 'book':
-                        score = 'book'
-                    elif event.score == 'tb':
-                        score = 'tb {0}'.format(event.mate)
-                    else:
-                        try:
-                            score = int(event.score)
-                            if game.turn == chess.BLACK:
-                                score *= -1
-                        except ValueError:
-                            score = event.score
-                            logging.debug('could not convert score ' + score)
-                        except TypeError:
-                            score = 'm {0}'.format(event.mate)
-                    DisplayMsg.show(Message.NEW_SCORE(score=score, mate=event.mate, mode=interaction_mode))
+                    DisplayMsg.show(Message.NEW_SCORE(score=event.score, mate=event.mate, mode=interaction_mode, turn=game.turn))
+                    break
+
+                if case(EventApi.NEW_DEPTH):
+                    DisplayMsg.show(Message.NEW_DEPTH(depth=event.depth))
                     break
 
                 if case(EventApi.SET_INTERACTION_MODE):
                     if interaction_mode in (Mode.NORMAL, Mode.OBSERVE, Mode.REMOTE):
-                        stop_clock()  # only stop, if the clock is really running
+                        stop_clock()
                     interaction_mode = event.mode
                     if engine.is_thinking():
-                        stop_search()  # dont need to stop, if pondering
-                    if engine.is_pondering() and interaction_mode == Mode.NORMAL:
-                        stop_search()  # if change from ponder modes to normal, also stops the pondering
+                        stop_search()
+                    if engine.is_pondering():
+                        stop_search()
                     set_wait_state()
                     DisplayMsg.show(Message.INTERACTION_MODE(mode=event.mode, mode_text=event.mode_text, ok_text=event.ok_text))
                     break
@@ -863,17 +855,23 @@ def main():
                     break
 
                 if case(EventApi.SHUTDOWN):
-                    if talker:
-                        talker.say_event(event)
                     DisplayMsg.show(Message.GAME_ENDS(result=GameResult.ABORT, play_mode=play_mode, game=game.copy()))
                     shutdown(args.dgtpi)
                     break
 
                 if case(EventApi.REBOOT):
-                    if talker:
-                        talker.say_event(event)
                     DisplayMsg.show(Message.GAME_ENDS(result=GameResult.ABORT, play_mode=play_mode, game=game.copy()))
                     reboot()
+                    break
+
+                if case(EventApi.EMAIL_LOG):
+                    if args.log_file:
+                        email_logger = Emailer(net=args.enable_internet, email=args.email, mailgun_key=args.mailgun_key,
+                                               smtp_server=args.smtp_server, smtp_user=args.smtp_user,
+                                               smtp_pass=args.smtp_pass, smtp_encryption=args.smtp_encryption,
+                                               smtp_from=args.smtp_from)
+                        body = 'You probably want to forward this file to a picochess developer ;-)'
+                        email_logger.send('Picochess LOG', body, '/opt/picochess/logs/{}'.format(args.log_file))
                     break
 
                 if case(EventApi.DGT_BUTTON):

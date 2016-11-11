@@ -27,7 +27,7 @@ class DgtLib(object):
         super(DgtLib, self).__init__()
         self.dgtserial = dgtserial
 
-    def wait(self):
+    def _wait_for_clock(self):
         has_to_wait = False
         while self.dgtserial.clock_lock:
             if not has_to_wait:
@@ -40,17 +40,25 @@ class DgtLib(object):
     def write(self, command):
         return self.dgtserial.write_board_command(command)
 
-    def set_text_3k(self, text, beep, ld, rd):
-        self.wait()
+    def set_text_3k(self, text, beep, ld=ClockDots.NONE, rd=ClockDots.NONE):
+        self._wait_for_clock()
         res = self.write([DgtCmd.DGT_CLOCK_MESSAGE, 0x0c, DgtClk.DGT_CMD_CLOCK_START_MESSAGE,
                           DgtClk.DGT_CMD_CLOCK_ASCII,
                           text[0], text[1], text[2], text[3], text[4], text[5], text[6], text[7], beep,
                           DgtClk.DGT_CMD_CLOCK_END_MESSAGE])
         return res
 
-    def set_text_xl(self, text, beep, ld, rd):
-        self.wait()
-        icn = ((rd & 0x07) | (ld << 3) & 0x38)
+    def set_text_xl(self, text, beep, ld=ClockDots.NONE, rd=ClockDots.NONE):
+        def transfer(dots):
+            result = 0
+            if dots == ClockDots.DOT:
+                result = 0x01
+            if dots == ClockDots.COLON:
+                result = 0x02
+            return result
+
+        self._wait_for_clock()
+        icn = ((transfer(rd) & 0x07) | (transfer(ld) << 3) & 0x38)
         res = self.write([DgtCmd.DGT_CLOCK_MESSAGE, 0x0b, DgtClk.DGT_CMD_CLOCK_START_MESSAGE,
                           DgtClk.DGT_CMD_CLOCK_DISPLAY,
                           text[2], text[1], text[0], text[5], text[4], text[3], icn, beep,
@@ -58,7 +66,7 @@ class DgtLib(object):
         return res
 
     def set_and_run(self, lr, lh, lm, ls, rr, rh, rm, rs):
-        self.wait()
+        self._wait_for_clock()
         side = ClockSide.NONE
         if lr == 1 and rr == 0:
             side = ClockSide.LEFT
@@ -71,7 +79,7 @@ class DgtLib(object):
         return res
 
     def end_text(self):
-        self.wait()
+        self._wait_for_clock()
         res = self.write([DgtCmd.DGT_CLOCK_MESSAGE, 0x03, DgtClk.DGT_CMD_CLOCK_START_MESSAGE,
                           DgtClk.DGT_CMD_CLOCK_END,
                           DgtClk.DGT_CMD_CLOCK_END_MESSAGE])

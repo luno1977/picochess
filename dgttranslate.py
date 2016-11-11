@@ -75,6 +75,7 @@ class DgtTranslate(object):
             beep = False
         maxtime = int(code[1:]) / 10
         wait = False
+        devs = {'ser', 'i2c', 'web'}
 
         if text_id == 'default':
             entxt = Dgt.DISPLAY_TEXT(l=msg, m=msg[:8], s=msg[:6])
@@ -318,6 +319,12 @@ class DgtTranslate(object):
             nltxt = entxt
             frtxt = entxt
             estxt = entxt
+        if text_id == 'gaviota':
+            entxt = Dgt.DISPLAY_TEXT(l='gaviota ' + msg, m='gavio' + msg, s='gav'+ msg)
+            detxt = entxt
+            nltxt = entxt
+            frtxt = entxt
+            estxt = entxt
         if text_id == 'menu_top_menu':
             entxt = Dgt.DISPLAY_TEXT(l='Top menu   ', m='Top menu', s='topmen')
             detxt = Dgt.DISPLAY_TEXT(l='Haupt Menu ', m='Hpt Menu', s='topmen')
@@ -390,6 +397,12 @@ class DgtTranslate(object):
             nltxt = Dgt.DISPLAY_TEXT(l='Remote     ', m='Remote  ', s='remote')
             frtxt = Dgt.DISPLAY_TEXT(l='Remote     ', m='Remote  ', s='remote')
             estxt = Dgt.DISPLAY_TEXT(l='Remoto     ', m='Remoto  ', s='remoto')
+        if text_id == 'mode_ponder_menu':
+            entxt = Dgt.DISPLAY_TEXT(l='Ponder     ', m='Ponder  ', s='ponder')
+            detxt = entxt
+            nltxt = entxt
+            frtxt = entxt
+            estxt = entxt
         if text_id == 'timemode_fixed_menu':
             entxt = Dgt.DISPLAY_TEXT(l='Move time  ', m='Movetime', s='move t')
             detxt = Dgt.DISPLAY_TEXT(l='Zugzeit    ', m='Zugzeit ', s='zug z ')
@@ -432,6 +445,12 @@ class DgtTranslate(object):
             nltxt = Dgt.DISPLAY_TEXT(l='Taal       ', m='Taal    ', s='taal  ')
             frtxt = Dgt.DISPLAY_TEXT(l='Langue     ', m='Langue  ', s='langue')
             estxt = Dgt.DISPLAY_TEXT(l='Idioma     ', m='Idioma  ', s='idioma')
+        if text_id == 'settings_logfile_menu':
+            entxt = Dgt.DISPLAY_TEXT(l='Log file   ', m='Log file', s='logfil')
+            detxt = entxt
+            nltxt = entxt
+            frtxt = entxt
+            estxt = entxt
         if text_id == 'gameresult_mate_menu':
             wait = True
             entxt = Dgt.DISPLAY_TEXT(l='mate       ', m='mate    ', s='mate  ')
@@ -570,6 +589,12 @@ class DgtTranslate(object):
             nltxt = Dgt.DISPLAY_TEXT(l='ok taal    ', m='ok taal ', s='oktaal')
             frtxt = Dgt.DISPLAY_TEXT(l='ok langue  ', m='okLangue', s='oklang')
             estxt = Dgt.DISPLAY_TEXT(l='ok idioma  ', m='okIdioma', s='oklang')
+        if text_id == 'oklogfile':
+            entxt = Dgt.DISPLAY_TEXT(l='ok log file', m='oklogfil', s='ok log')
+            detxt = entxt
+            nltxt = entxt
+            frtxt = entxt
+            estxt = entxt
         if text_id == 'tc_fixed':
             entxt = Dgt.DISPLAY_TEXT(l='Move time' + msg, m='Move t' + msg, s='mov ' + msg)
             detxt = Dgt.DISPLAY_TEXT(l='Zugzeit  ' + msg, m='Zug z ' + msg, s='zug ' + msg)
@@ -601,6 +626,7 @@ class DgtTranslate(object):
                 txt.wait = wait
                 txt.beep = beep
                 txt.maxtime = maxtime
+                txt.devs = devs
 
         if entxt is None:
             entxt = Dgt.DISPLAY_TEXT(l=None, m=text_id, s=None, wait=False, beep=self.bl(BeepLevel.YES), maxtime=0)
